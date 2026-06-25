@@ -2502,7 +2502,7 @@ Index: linux-kernel-v6.17/drivers/media/platform/intel/ipu-acpi.c
  #if IS_ENABLED(CONFIG_VIDEO_TEVS)
  	{ "TN_TEVS", TEVS_NAME, get_sensor_pdata, NULL, 0, TYPE_DIRECT, NULL,
  		TEVS_I2C_ADDRESS, 400 },	// TEVS HID
-+	{ "VLSGM296", "vlsgm2", get_sensor_pdata, NULL, 0, TYPE_SERDES, "max96724",
++	{ "VLSGM296", "vlsgm2", get_sensor_pdata, NULL, 0, TYPE_SERDES, "max9x",
 +		TEVS_I2C_ADDRESS, 1600 },
  #endif
  };
