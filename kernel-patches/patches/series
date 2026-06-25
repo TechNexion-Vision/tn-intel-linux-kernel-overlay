@@ -233,6 +233,7 @@
 0001-Revert-media-i2c-max9x-uniform-serdes-driver-compilati.ipu
 0002-Revert-media-i2c-max9x-fix-S3-S4-error-for-max9x.ipu
 0012-tevs-ptl-sensor-driver.ipu
+0013-tn-vlsgm2-support.ipu
 # iaa
 0001-dmaengine-idxd-Add-a-new-IAA-device-ID-for-Wildcat-Lak.iaa
 # tbt
