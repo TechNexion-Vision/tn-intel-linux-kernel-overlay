@@ -1,0 +1,55 @@
+Index: linux-kernel-v6.17/drivers/media/i2c/max9x/max96717.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/max9x/max96717.c
++++ linux-kernel-v6.17/drivers/media/i2c/max9x/max96717.c
+@@ -40,6 +40,7 @@ static const struct regmap_config max967
+ // Declarations
+ static int max96717_set_pipe_csi_enabled(struct max9x_common *common, unsigned int pipe_id,
+ 					 unsigned int csi_id, bool enable);
++static int max96717_set_pipe_stream_id(struct max9x_common *common, unsigned int pipe_id);
+ static int max96717_video_pipe_double_pixel(struct max9x_common *common, unsigned int pipe_id, unsigned int bpp);
+ static int max96717_max_elements(struct max9x_common *common, enum max9x_element_type element);
+ static int max96717_enable_serial_link(struct max9x_common *common, unsigned int link);
+@@ -271,6 +272,17 @@ static int max96717_set_pipe_csi_enabled
+ 	return 0;
+ }
+ 
++static int max96717_set_pipe_stream_id(struct max9x_common *common,
++				       unsigned int pipe_id)
++{
++	struct regmap *map = common->map;
++
++	return regmap_update_bits(map, MAX96717_CFGV_VIDEO_Z_TR3,
++				  MAX96717_TR3_TX_STR_SEL_FIELD,
++				  MAX9X_FIELD_PREP(MAX96717_TR3_TX_STR_SEL_FIELD,
++						    pipe_id));
++}
++
+ /**
+  * max96717_video_pipe_double_pixel() - Configure Double Loading Mode on a video pipe
+  * @common: max9x_common
+@@ -394,6 +406,10 @@ static int max96717_enable_serial_link(s
+ 			continue;
+ 
+ 		config = &common->video_pipe[pipe_id].config;
++		ret = max96717_set_pipe_stream_id(common, pipe_id);
++		if (ret)
++			return ret;
++
+ 		ret = max96717_set_pipe_csi_enabled(common, pipe_id,
+ 						    config->src_csi, true);
+ 		if (ret)
+Index: linux-kernel-v6.17/drivers/media/i2c/max9x/max96717.h
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/max9x/max96717.h
++++ linux-kernel-v6.17/drivers/media/i2c/max9x/max96717.h
+@@ -88,6 +88,9 @@ enum max96717_gpio_pull_updn_sel {
+ #define MAX96717_FRONTTOP_2X_BPP_EN_FIELD BIT(5)
+ #define MAX96717_FRONTTOP_2X_BPP_FIELD GENMASK(4, 0)
+ 
++#define MAX96717_CFGV_VIDEO_Z_TR3 (0x5B)
++#define MAX96717_TR3_TX_STR_SEL_FIELD GENMASK(2, 0)
++
+ #define MAX96717_MIPI_RX (0x330)
+ #define MAX96717_MIPI_RX_1 (MAX96717_MIPI_RX + 1)
+ #define MAX96717_MIPI_RX_1_SEL_CSI_LANES_FIELD(csi_id) (GENMASK(1, 0) << ((csi_id + 1) * 4))
