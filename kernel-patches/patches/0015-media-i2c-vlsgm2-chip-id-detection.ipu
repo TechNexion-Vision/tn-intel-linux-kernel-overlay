@@ -1,0 +1,83 @@
+Index: linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/tevs/vlsgm2_main.c
++++ linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+@@ -33,6 +33,7 @@
+ #define HOST_COMMAND_TEVS_INFO_VERSION_MSB 						(0x3000)
+ #define HOST_COMMAND_TEVS_INFO_VERSION_LSB 						(0x3002)
+ #define HOST_COMMAND_TEVS_BOOT_STATE 							(0x3004)
++#define HOST_COMMAND_TEVS_SENSOR_CHIP_ID						(0x3008)
+ 
+ /* Define host command register of ISP control page */
+ #define HOST_COMMAND_ISP_CTRL_PREVIEW_WIDTH 					(0x3100)
+@@ -349,6 +350,7 @@ struct vlsgm2 {
+ 	int data_frequency;
+ 	u8 selected_mode;
+ 	u8 selected_sensor;
++	u16 chip_id;
+ 	bool hw_reset_mode;
+ 	int trigger_mode;
+ 	char *sensor_name;
+@@ -622,6 +624,22 @@ static int vlsgm2_load_header_info(struc
+ 	}
+ }
+ 
++static int vlsgm2_get_chip_id(struct vlsgm2 *vlsgm2)
++{
++	u16 val;
++	int ret =
++		vlsgm2_i2c_read_16b(vlsgm2, HOST_COMMAND_TEVS_SENSOR_CHIP_ID, &val);
++
++	if (ret < 0) {
++		dev_err(vlsgm2->dev, "Can't get chip ID. ret = %d.\n", ret);
++		return ret;
++	}
++
++	vlsgm2->chip_id = val;
++	dev_info(vlsgm2->dev, "Chip ID: 0x%.4X\n", vlsgm2->chip_id);
++	return 0;
++}
++
+ static int vlsgm2_standby(struct vlsgm2 *vlsgm2, int enable)
+ {
+ 	u16 v = 0xFFFF;
+@@ -2187,19 +2205,35 @@ static int vlsgm2_probe(struct i2c_clien
+ 	ret = vlsgm2_load_header_info(vlsgm2);
+ 	if (ret < 0) {
+ 		dev_err(dev, "load header information failed\n");
+-		ret = -EINVAL;
+ 		goto error_power_off;
+-	} else {
++	}
++
++	ret = vlsgm2_get_chip_id(vlsgm2);
++	if (ret < 0) {
++		dev_err(dev, "get chip ID failed\n");
++		goto error_power_off;
++	}
++
++	if (vlsgm2->chip_id == SENSOR_CHIP_ID_NONE) {
+ 		for (i = 0; i < ARRAY_SIZE(tevs_sensor_table); i++) {
+ 			if (strcmp((const char *)vlsgm2->header_info->product_name,
+ 				   tevs_sensor_table[i].sensor_name) == 0)
+ 				break;
+ 		}
++	} else {
++		for (i = 0; i < ARRAY_SIZE(tevs_sensor_table); i++) {
++			if (vlsgm2->chip_id == tevs_sensor_table[i].chip_id)
++				break;
++		}
+ 	}
+ 
+ 	if (i >= ARRAY_SIZE(tevs_sensor_table)) {
+-		dev_err(dev, "cannot not support the product: %s\n",
+-			(const char *)vlsgm2->header_info->product_name);
++		if (vlsgm2->chip_id == SENSOR_CHIP_ID_NONE)
++			dev_err(dev, "cannot not support the product: %s\n",
++				(const char *)vlsgm2->header_info->product_name);
++		else
++			dev_err(dev, "cannot not support the chip ID: 0x%.4X\n",
++				vlsgm2->chip_id);
+ 		ret = -EINVAL;
+ 		goto error_power_off;
+ 	}
