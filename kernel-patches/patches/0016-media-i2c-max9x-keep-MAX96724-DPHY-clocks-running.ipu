@@ -1,0 +1,173 @@
+From d829746064373fd223a66cc4167765042fd3e9b0 Mon Sep 17 00:00:00 2001
+From: yifan wang <yifan.wang@technexion.com>
+Date: Mon, 13 Jul 2026 15:07:58 +0800
+Subject: [PATCH] media: i2c: max9x: keep MAX96724 DPHY clocks running
+
+Keep the MAX96724 DPHY clocks running once a V4L2 stream has been enabled on a DPHY link. This avoids downstream DPHY-to-CPHY receiver relock failures on repeated stream start/stop cycles.
+
+Also add a DPHY startup delay/reconfigure guard so the first stream has enough time for the DPLL path to settle before video capture proceeds.
+
+Validated on PTL VLS-GM2 DPHY path with repeated vlsgm2-1 640x480 UYVY streams across cold reboot cycles.
+---
+ drivers/media/i2c/max9x/max96724.c | 38 +++++++++++++++++---
+ drivers/media/i2c/max9x/serdes.c   | 56 ++++++++++++++++++++++++++++--
+ drivers/media/i2c/max9x/serdes.h   |  4 +++
+ 3 files changed, 91 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/media/i2c/max9x/max96724.c b/drivers/media/i2c/max9x/max96724.c
+index b214e1176..fc30908ed 100644
+--- a/drivers/media/i2c/max9x/max96724.c
++++ b/drivers/media/i2c/max9x/max96724.c
+@@ -601,13 +601,41 @@ static int max96724_set_csi_link_enabled(struct max9x_common *common,
+ 		if (ret)
+ 			return ret;
+ 
+-	} else if (!enable && csi_link->usecount == 0) {
+-		// Disable && no more users
++		if (csi_link->config.bus_type == V4L2_MBUS_CSI2_DPHY) {
++			/* DPHY DPLL at 2000MHz needs ~5-20ms to lock; use 50ms margin */
++			msleep(50);
++		}
+ 
+-		ret = max96724_set_phy_enabled(common, csi_id, false);
+-		if (ret)
+-			return ret;
++	} else if (enable && csi_link->usecount > 1 &&
++		   csi_link->config.bus_type == V4L2_MBUS_CSI2_DPHY) {
++		if (!common->dphy_first_enable_done) {
++			if (common->dphy_reconfigure_pending) {
++				dev_dbg(dev, "CSI%d: configure_csi_dphy for new stream",
++					csi_id);
++				ret = max96724_configure_csi_dphy(common);
++				if (ret)
++					return ret;
++				common->dphy_reconfigure_pending = false;
++			}
++
++			ret = max96724_set_phy_enabled(common, csi_id, true);
++			if (ret)
++				return ret;
++			msleep(300);
++			common->dphy_first_enable_done = true;
++		}
++
++	} else if (!enable) {
++		if (csi_link->config.bus_type == V4L2_MBUS_CSI2_DPHY) {
++			common->dphy_reconfigure_pending = true;
++			common->dphy_first_enable_done = false;
++		}
+ 
++		if (csi_link->usecount == 0) {
++			ret = max96724_set_phy_enabled(common, csi_id, false);
++			if (ret)
++				return ret;
++		}
+ 	}
+ 
+ 	return 0;
+diff --git a/drivers/media/i2c/max9x/serdes.c b/drivers/media/i2c/max9x/serdes.c
+index cc12e41cf..f712f98cc 100644
+--- a/drivers/media/i2c/max9x/serdes.c
++++ b/drivers/media/i2c/max9x/serdes.c
+@@ -32,6 +32,9 @@
+ 
+ #include "serdes.h"
+ 
++#define MAX96724_MIPI_PHY0 0x8A0
++#define MAX96724_MIPI_PHY0_FORCE_ALL_CLOCKS BIT(7)
++
+ static const s64 max9x_op_sys_clock[] =  {
+ 	MAX9X_LINK_FREQ_MBPS_TO_HZ(2500),
+ 	MAX9X_LINK_FREQ_MBPS_TO_HZ(2400),
+@@ -1443,8 +1446,8 @@ static int max9x_streams_mask_to_stream(u64 streams_mask, u32 *stream)
+ }
+ 
+ static int max9x_get_corresponding_pad_and_stream(struct v4l2_subdev_state *state, u32 pad,
+-				       u32 stream, u32 *another_pad,
+-				       u32 *another_stream)
++					       u32 stream, u32 *another_pad,
++					       u32 *another_stream)
+ {
+ 	struct v4l2_subdev_route *route;
+ 
+@@ -1464,6 +1467,46 @@ static int max9x_get_corresponding_pad_and_stream(struct v4l2_subdev_state *stat
+ 	return -EINVAL;
+ }
+ 
++static bool max9x_has_dphy_csi_link(struct max9x_common *common)
++{
++	unsigned int i;
++
++	for (i = 0; i < common->num_csi_links; i++) {
++		if (common->csi_link[i].config.bus_type == V4L2_MBUS_CSI2_DPHY)
++			return true;
++	}
++
++	return false;
++}
++
++static void max9x_apply_max96724_dphy_clock_quirk(struct max9x_common *common)
++{
++	int ret;
++
++	if (common->type != MAX9X_DESERIALIZER || !common->des)
++		return;
++
++	if (common->des->chip_type != MAX96724)
++		return;
++
++	if (!common->dphy_v4l2_stream_seen ||
++	    common->dphy_force_clock_enabled ||
++	    !max9x_has_dphy_csi_link(common))
++		return;
++
++	ret = regmap_update_bits(common->map, MAX96724_MIPI_PHY0,
++				 MAX96724_MIPI_PHY0_FORCE_ALL_CLOCKS,
++				 MAX96724_MIPI_PHY0_FORCE_ALL_CLOCKS);
++	if (ret) {
++		dev_warn(common->dev, "Failed to keep MAX96724 DPHY clocks running (%d)",
++			 ret);
++		return;
++	}
++
++	common->dphy_force_clock_enabled = true;
++	dev_dbg(common->dev, "Keep MAX96724 DPHY clocks running");
++}
++
+ static int _max9x_set_stream(struct v4l2_subdev *subdev,
+ 			     struct v4l2_subdev_state *state, u32 pad,
+ 			     u64 streams_mask, int enable)
+@@ -1496,6 +1539,15 @@ static int _max9x_set_stream(struct v4l2_subdev *subdev,
+ 		ret = _max9x_ser_set_stream(common, sink_pad, sink_stream,
+ 					    enable);
+ 
++	if (!ret && common->type == MAX9X_DESERIALIZER) {
++		if (enable) {
++			common->dphy_v4l2_stream_seen = true;
++			max9x_apply_max96724_dphy_clock_quirk(common);
++		} else {
++			max9x_apply_max96724_dphy_clock_quirk(common);
++		}
++	}
++
+ 	return ret;
+ }
+ 
+diff --git a/drivers/media/i2c/max9x/serdes.h b/drivers/media/i2c/max9x/serdes.h
+index 227f61e03..b8d6835fa 100644
+--- a/drivers/media/i2c/max9x/serdes.h
++++ b/drivers/media/i2c/max9x/serdes.h
+@@ -286,6 +286,10 @@ struct max9x_common {
+ 	int isolated_link;
+ 	int selected_link;
+ 	bool external_refclk_enable;
++	bool dphy_reconfigure_pending;
++	bool dphy_first_enable_done;
++	bool dphy_v4l2_stream_seen;
++	bool dphy_force_clock_enabled;
+ };
+ 
+ int max9x_serdes_mhz_to_rate(struct max9x_serdes_rate_table *table, int len, unsigned int freq_mhz);
+-- 
+2.34.1
+
