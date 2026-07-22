@@ -1,0 +1,57 @@
+media: i2c: max9x: select 1x4A for Lexcom MAX96724 Port A
+
+Select the MAX96724 1x4A topology for the Lexcom GM04 Port A wiring and enable both PHY0 and PHY1 for its CSI1 master.
+Index: linux-kernel-v6.17/drivers/media/i2c/max9x/max96724.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/max9x/max96724.c
++++ linux-kernel-v6.17/drivers/media/i2c/max9x/max96724.c
+@@ -93,9 +93,18 @@ static int max96724_set_phy_enabled(stru
+ 	mutex_lock(lock);
+ 	dev_dbg(dev, "CSI link %d: %s", csi_id, (enable ? "enable" : "disable"));
+ 
+-	ret = regmap_update_bits(map, MAX96724_MIPI_PHY_ENABLE,
+-		MAX96724_MIPI_PHY_ENABLE_FIELD(csi_id),
+-		MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_ENABLE_FIELD(csi_id), enable ? 1U : 0U));
++	if (csi_id == 1) {
++		/* CSI1 is the Port A master in 1x4A mode and uses PHY0/PHY1. */
++		ret = regmap_update_bits(map, MAX96724_MIPI_PHY_ENABLE,
++			MAX96724_MIPI_PHY_ENABLE_FIELD(0) |
++			MAX96724_MIPI_PHY_ENABLE_FIELD(1),
++			MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_ENABLE_FIELD(0), enable ? 1U : 0U) |
++			MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_ENABLE_FIELD(1), enable ? 1U : 0U));
++	} else {
++		ret = regmap_update_bits(map, MAX96724_MIPI_PHY_ENABLE,
++			MAX96724_MIPI_PHY_ENABLE_FIELD(csi_id),
++			MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_ENABLE_FIELD(csi_id), enable ? 1U : 0U));
++	}
+ 	mutex_unlock(lock);
+ 	return ret;
+ }
+@@ -224,7 +233,26 @@ static int max96724_configure_csi_dphy(s
+ 	//TODO: Allow DT to override lane mapping?
+ 
+ 	// Determine correct phy_mode and associate lane mapping
+-	if (common->csi_link[0].config.num_lanes <= 2
++	if (common->csi_link[1].enabled &&
++	    common->csi_link[1].config.num_lanes > 0 &&
++	    common->csi_link[0].config.num_lanes == 0) {
++		/*
++		 * Lexcom GM04 routes the active GMSL output through MAX96724
++		 * Port A.  Select the 1x4A topology so the DA lanes are used
++		 * instead of falling into the default 4x2 topology.
++		 */
++		phy_mode = MAX96724_MIPI_PHY_1X4A_22;
++
++		phy_lane_map[0] = MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(0, 0), 0)
++				| MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(0, 1), 1);
++		phy_lane_map[1] = MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(1, 0), 0)
++				| MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(1, 1), 1);
++		phy_lane_map[2] = MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(2, 0), 0)
++				| MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(2, 1), 1);
++		phy_lane_map[3] = MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(3, 0), 0)
++				| MAX9X_FIELD_PREP(MAX96724_MIPI_PHY_LANE_MAP_FIELD(3, 1), 1);
++
++	} else if (common->csi_link[0].config.num_lanes <= 2
+ 	    && common->csi_link[1].config.num_lanes <= 2
+ 	    && common->csi_link[2].config.num_lanes <= 2
+ 	    && common->csi_link[3].config.num_lanes <= 2) {
