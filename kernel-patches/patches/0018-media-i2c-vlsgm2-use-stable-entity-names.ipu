@@ -1,0 +1,43 @@
+media: i2c: vlsgm2: use stable entity names
+
+Use the stable I2C device name assigned by max9x for VLS-GM2 media entities, while preserving the existing platform-data suffix fallback.
+Index: linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/tevs/vlsgm2_main.c
++++ linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+@@ -2176,6 +2176,10 @@ static int vlsgm2_probe(struct i2c_clien
+ 	struct vlsgm2 *vlsgm2 = NULL;
+ 	struct device *dev = &client->dev;
+ 	struct v4l2_mbus_framefmt *fmt;
++	static const char i2c_prefix[] = "i2c-";
++	char driver_name_prefix[sizeof(DRIVER_NAME) + 1];
++	const char *dev_name_str;
++	const char *stable_name;
+ 	int i = ARRAY_SIZE(tevs_sensor_table);
+ 	int ret;
+ 
+@@ -2203,10 +2207,21 @@ static int vlsgm2_probe(struct i2c_clien
+ 
+ 	v4l2_i2c_subdev_init(&vlsgm2->v4l2_subdev, client, &vlsgm2_subdev_ops);
+ 
+-	if (vlsgm2->platform_data && vlsgm2->platform_data->suffix)
++	/* max9x assigns stable I2C device names such as i2c-vlsgm2 a-2. */
++	snprintf(driver_name_prefix, sizeof(driver_name_prefix), "%s ", DRIVER_NAME);
++	dev_name_str = dev_name(dev);
++	stable_name = dev_name_str;
++	if (!strncmp(stable_name, i2c_prefix, strlen(i2c_prefix)))
++		stable_name += strlen(i2c_prefix);
++
++	if (!strncmp(stable_name, driver_name_prefix, strlen(driver_name_prefix))) {
++		strscpy(vlsgm2->v4l2_subdev.name, stable_name,
++			sizeof(vlsgm2->v4l2_subdev.name));
++	} else if (vlsgm2->platform_data && vlsgm2->platform_data->suffix) {
+ 		snprintf(vlsgm2->v4l2_subdev.name,
+-				sizeof(vlsgm2->v4l2_subdev.name), "vlsgm2 %c",
+-				vlsgm2->platform_data->suffix);
++			 sizeof(vlsgm2->v4l2_subdev.name), "%s %c", DRIVER_NAME,
++			 vlsgm2->platform_data->suffix);
++	}
+ 
+ 	vlsgm2_pca953x_reset(vlsgm2, 0);
+ 	msleep(TEVS_BOOT_TIME);
