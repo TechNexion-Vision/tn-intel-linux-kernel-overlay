@@ -237,6 +237,7 @@
 0014-media-i2c-max96717-set-stream-id.ipu
 0015-media-i2c-vlsgm2-chip-id-detection.ipu
 0016-media-i2c-max9x-keep-MAX96724-DPHY-clocks-running.ipu
+0017-media-i2c-vlsgm2-handle-frame-intervals.ipu
 # iaa
 0001-dmaengine-idxd-Add-a-new-IAA-device-ID-for-Wildcat-Lak.iaa
 # tbt

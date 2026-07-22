@@ -1,0 +1,143 @@
+media: i2c: vlsgm2: handle frame intervals
+
+Add V4L2 subdev get/set frame interval support and use the selected frame rate when starting the VLS-GM2 stream.
+Index: linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/i2c/tevs/vlsgm2_main.c
++++ linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
+@@ -348,6 +348,7 @@ struct vlsgm2 {
+ 	int data_lanes;
+ 	int continuous_clock;
+ 	int data_frequency;
++	unsigned int fps;
+ 	u8 selected_mode;
+ 	u8 selected_sensor;
+ 	u16 chip_id;
+@@ -707,6 +708,66 @@ static int vlsgm2_check_boot_state(struc
+ 	return ret;
+ }
+ 
++static int vlsgm2_get_frame_interval(struct v4l2_subdev *sub_dev,
++					   struct v4l2_subdev_state *state,
++					   struct v4l2_subdev_frame_interval *fi)
++{
++	struct vlsgm2 *vlsgm2 = container_of(sub_dev, struct vlsgm2, v4l2_subdev);
++
++	if (fi->pad != 0)
++		return -EINVAL;
++
++	dev_dbg(sub_dev->dev, "%s()\n", __func__);
++
++	fi->interval.numerator = 1;
++	fi->interval.denominator = vlsgm2->fps;
++	dev_dbg(sub_dev->dev, "fps = %d\n", vlsgm2->fps);
++
++	return 0;
++}
++
++static int vlsgm2_set_frame_interval(struct v4l2_subdev *sub_dev,
++					   struct v4l2_subdev_state *state,
++					   struct v4l2_subdev_frame_interval *fi)
++{
++	struct vlsgm2 *vlsgm2 = container_of(sub_dev, struct vlsgm2, v4l2_subdev);
++	unsigned int max_fps, min_fps;
++	unsigned int fps =
++		fi->interval.numerator ?
++			fi->interval.denominator / fi->interval.numerator :
++			fi->interval.denominator;
++
++	if (fi->pad != 0)
++		return -EINVAL;
++
++	dev_dbg(sub_dev->dev, "%s()\n", __func__);
++
++	max_fps = tevs_sensor_table[vlsgm2->selected_sensor]
++			  .res_list[vlsgm2->selected_mode]
++			  .framerates[0];
++	min_fps =
++		tevs_sensor_table[vlsgm2->selected_sensor]
++			.res_list[vlsgm2->selected_mode]
++			.framerates
++				[ARRAY_SIZE(
++					 tevs_sensor_table[vlsgm2->selected_sensor]
++						 .res_list[vlsgm2->selected_mode]
++						 .framerates) -
++				 1];
++
++	if (fps > max_fps)
++		fps = max_fps;
++	else if (fps < min_fps)
++		fps = min_fps;
++
++	fi->interval.numerator = 1;
++	fi->interval.denominator = fps;
++	vlsgm2->fps = fps;
++	dev_dbg(sub_dev->dev, "fps = %d\n", fps);
++
++	return 0;
++}
++
+ static int vlsgm2_set_stream(struct v4l2_subdev *sub_dev, int enable)
+ {
+ 	struct vlsgm2 *vlsgm2 = container_of(sub_dev, struct vlsgm2, v4l2_subdev);
+@@ -732,9 +793,6 @@ static int vlsgm2_set_stream(struct v4l2
+ 			ret = vlsgm2_standby(vlsgm2, 0);
+ 
+ 		if (ret == 0) {
+-			int fps = tevs_sensor_table[vlsgm2->selected_sensor]
+-					  .res_list[vlsgm2->selected_mode]
+-					  .framerates;
+ 			dev_dbg(sub_dev->dev, "%s() width=%d, height=%d\n",
+ 				__func__,
+ 				tevs_sensor_table[vlsgm2->selected_sensor]
+@@ -776,9 +834,9 @@ static int vlsgm2_set_stream(struct v4l2
+ 			// 	vlsgm2->exp_time->cur.val & 0xFFFF);
+ 			vlsgm2_i2c_write_16b(
+ 				vlsgm2, HOST_COMMAND_ISP_CTRL_PREVIEW_MAX_FPS,
+-				fps);
++				vlsgm2->fps);
+ 			if (vlsgm2->max_fps)
+-				vlsgm2->max_fps->cur.val = fps;
++				vlsgm2->max_fps->cur.val = vlsgm2->fps;
+ 			vlsgm2_i2c_read(vlsgm2, TEVS_AE_MANUAL_EXP_TIME, exp, 4);
+ 			vlsgm2->exp_time->cur.val = be32_to_cpup((__be32 *)exp) &
+ 				  TEVS_AE_MANUAL_EXP_TIME_MASK;
+@@ -969,7 +1027,10 @@ static int vlsgm2_enum_frame_interval(st
+ 	struct vlsgm2 *vlsgm2 = container_of(sub_dev, struct vlsgm2, v4l2_subdev);
+ 	int i;
+ 
+-	if ((fie->pad != 0) || (fie->index != 0))
++	if ((fie->pad != 0) ||
++	    (fie->index >= ARRAY_SIZE(tevs_sensor_table[vlsgm2->selected_sensor]
++					      .res_list[fie->index]
++					      .framerates)))
+ 		return -EINVAL;
+ 
+ 	dev_dbg(sub_dev->dev, "%s() index [%u]\n", __func__, fie->index);
+@@ -987,7 +1048,7 @@ static int vlsgm2_enum_frame_interval(st
+ 			fie->interval.denominator =
+ 				tevs_sensor_table[vlsgm2->selected_sensor]
+ 					.res_list[i]
+-					.framerates;
++					.framerates[fie->index];
+ 			break;
+ 		}
+ 	}
+@@ -2089,6 +2150,8 @@ static const struct v4l2_subdev_pad_ops
+ 	.get_selection = vlsgm2_get_selection,
+ 	.enum_frame_size = vlsgm2_enum_frame_size,
+ 	.enum_frame_interval = vlsgm2_enum_frame_interval,
++	.get_frame_interval = vlsgm2_get_frame_interval,
++	.set_frame_interval = vlsgm2_set_frame_interval,
+ };
+ 
+ static const struct v4l2_subdev_ops vlsgm2_subdev_ops = {
+@@ -2274,6 +2337,8 @@ static int vlsgm2_probe(struct i2c_clien
+ 
+ 	/* Initialize source pads */
+ 	vlsgm2->pad.flags = MEDIA_PAD_FL_SOURCE;
++	vlsgm2->fps =
++		tevs_sensor_table[vlsgm2->selected_sensor].res_list[0].framerates[0];
+ 	ret = media_entity_pads_init(&vlsgm2->v4l2_subdev.entity, 1, &vlsgm2->pad);
+ 	if (ret) {
+ 		dev_err(vlsgm2->dev, "failed to init entity pads: %d\n", ret);
