@@ -845,7 +845,7 @@ Index: linux-kernel-v6.17/drivers/media/i2c/tevs/vlsgm2_main.c
 +				boot_state);
 +			ret = -EINVAL;
 +		}
-+		msleep(20);
++		msleep(50);
 +	}
 +
 +	return ret;
