@@ -1,70 +1,65 @@
-# Overview
-This is the Linux kernel overlay repository to support the Intel products.
-And it is expected to help users generate the binary kernel image quickly.
+# TechNexion Linux Kernel Overlay for Intel Panther Lake
 
-# What is in the repository
+This repository contains the kernel configuration, out-of-tree patches, and
+build scripts used by TechNexion to build Linux kernel packages for Intel
+Panther Lake camera platforms.
 
-## The kernel patch
-In the kernel-patches directory, there are the Linux kernel patches which have
-not been upstreamed to Linux kernel community. We use the quilt tool to manage 
-them and they can be applied to the community kernel automatically.
+It is primarily consumed by
+[tn-intel-camera-deploy](https://github.com/TechNexion-Vision/tn-intel-camera-deploy)
+when building a complete IPU7 camera deployment bundle.
 
-## kernel configs
-In the kernel-config directory, there are three-level kernel configurations.
+This repository does not contain or maintain the complete Linux kernel source.
+The build script downloads the upstream Linux kernel source and applies the
+configuration and patches provided here.
 
-	- base-os(ubuntu), 
-	- features (the .cfg file in kernel-config/features directory)
-	- kernel-config/overlay/overlay.cfg
+## Repository Contents
 
-The overlay.cfg overwrites the features configs (.cfg), and then they also
-overwrite base-os kernel config.
+- `kernel-patches/` — out-of-tree patches applied with Quilt
+- `kernel-config/` — base, feature, and platform kernel configurations
+- `build.sh` — kernel source preparation, patching, build, and Debian packaging
+- `config.sh` — upstream kernel version and build configuration
 
-## cmd-param
-cmd-param file has the kernel command line which is ONLY for the preempt-rt
-kernel. 
+## Branches
 
-## shell scripts
-build.sh is provided to compile the kernel image. normally user only need run
-it in Ubuntu OS to get the .deb image. In config.sh, there are configurations
-for this release.
+| Branch | Purpose |
+|---|---|
+| `main` | Standard TechNexion Panther Lake camera kernel |
+| `lexcom` | Lexcom-specific Panther Lake camera kernel |
 
-# How it works
-Run the build.sh script, and it will generate the debian package.
+The selected branch must match the branch used by
+`tn-intel-camera-deploy`.
 
-usage:
+## Recommended Usage
 
-	./build.sh -r {yes/no, yes if build realtime kernel. otherwise no.}
-		   -t { linux_kernel_tag }
-		   -b { build-id }
-		   -c { customized_kver_string }
+Normally, this repository does not need to be cloned or built manually.
+Use the matching branch of `tn-intel-camera-deploy`:
 
-Build non-rt kenrel:
+```bash
+git clone https://github.com/TechNexion-Vision/tn-intel-camera-deploy.git
+cd tn-intel-camera-deploy
+./ptl-camera.sh --all
+```
 
-	./build.sh -r no
+The deployment script automatically clones the correct kernel overlay branch,
+builds the kernel Debian package, and includes it in the final deployment
+bundle.
 
-built rt kernel:
+## Direct Kernel Build
 
-	./build.sh -r yes
+For standalone kernel development:
 
-notes, the default value of -r is no. that means ./build.sh (without -r) would
-generate the non-rt binary kernel.
+```bash
+./build.sh \
+  -r no \
+  -t <build-tag> \
+  -b <build-number> \
+  -c <kernel-suffix>
+```
 
-In case you want to add the other meaningful words into the image name, Pls.
-use -c parameters. for example: 
-	
-	./build.sh -c my-rt-build
+Generated kernel Debian packages are placed in the repository root after a
+successful build.
 
--t and -b can be used to add tag and build-id information into the name string
-of binary kernel image. 
+## License
 
-We normally have below commands to build the non-rt and rt .deb image:
-
-	./build.sh -r no  -t 20250501-b 1
-	./build.sh -r yes -t 20250501-b 2
-
-# Notes
-This should only be used for platform feature evaluation and not for production 
-or deployment with commercial Linux distribution.
-
-# Support
-baoli.zhang@intel.com
+The downloaded Linux kernel source and the patches in this repository remain
+subject to their respective upstream licenses.
