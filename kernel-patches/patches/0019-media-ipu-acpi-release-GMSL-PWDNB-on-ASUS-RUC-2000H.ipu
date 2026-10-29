@@ -1,0 +1,82 @@
+media: ipu-acpi: release GMSL PWDNB on ASUS RUC-2000H
+
+Request the ACPI reset GPIO as output-high before MAX9x probes and
+wait 10-11 ms for local I2C startup. Restrict this to the ASUS RUC-2000H
+VLSGM296/max9x path; keep the GPIO owned by the ACPI device.
+Index: linux-kernel-v6.17/drivers/media/platform/intel/ipu-acpi-pdata.c
+===================================================================
+--- linux-kernel-v6.17.orig/drivers/media/platform/intel/ipu-acpi-pdata.c
++++ linux-kernel-v6.17/drivers/media/platform/intel/ipu-acpi-pdata.c
+@@ -13,12 +13,14 @@
+  *
+  */
+ 
++#include <linux/delay.h>
++#include <linux/dmi.h>
++#include <linux/gpio.h>
+ #include <media/ipu-acpi.h>
+ #include <media/ipu-acpi-pdata.h>
+ 
+ #if IS_ENABLED(CONFIG_VIDEO_TEVS)
+ #include <media/i2c/tevs.h>
+-#include <linux/gpio.h>
+ #endif
+ 
+ #define MIN_SENSOR_I2C 1
+@@ -355,6 +357,43 @@ static int set_serdes_subdev(struct ipu7
+ 	return 0;
+ }
+ 
++/* RUC-2000H leaves the GMSL PWDNB line low before MAX9x probing. */
++static int asus_gmsl_release_pwdnb(struct device *dev,
++				 struct control_logic_data *ctl_data,
++				 const char *hid_name, const char *des_name)
++{
++	unsigned int i;
++	int ret;
++
++	if (!dmi_match(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC.") ||
++	    !dmi_match(DMI_PRODUCT_NAME, "RUC-2000H") ||
++	    !dmi_match(DMI_BOARD_NAME, "RUC-2000") ||
++	    strcmp(hid_name, "VLSGM296") || strcmp(des_name, "max9x"))
++		return 0;
++
++	if (!ctl_data->completed)
++		return dev_err_probe(dev, -EINVAL, "Missing ASUS GMSL control logic\n");
++
++	for (i = 0; i < ctl_data->gpio_num; i++) {
++		if (!ctl_data->gpio[i].valid || ctl_data->gpio[i].func != GPIO_RESET)
++			continue;
++
++		/* Hold the board's active-low PWDNB high for the ACPI device lifetime. */
++		ret = devm_gpio_request_one(dev, ctl_data->gpio[i].pin,
++					   GPIOF_OUT_INIT_HIGH, "asus-gmsl-pwdnb");
++		if (ret)
++			return dev_err_probe(dev, ret, "Failed to release ASUS GMSL PWDNB\n");
++
++		/* MAX96724 local I2C wake time is 2.25 ms; allow startup margin. */
++		usleep_range(10000, 11000);
++		dev_info(dev, "ASUS GMSL: released PWDNB GPIO %u before probe\n",
++			 ctl_data->gpio[i].pin);
++		return 0;
++	}
++
++	return dev_err_probe(dev, -EINVAL, "Missing ASUS GMSL reset GPIO\n");
++}
++
+ static int set_pdata(struct ipu7_isys_subdev_info **sensor_sd,
+ 		struct device *dev,
+ 		const char *sensor_name,
+@@ -402,6 +441,12 @@ static int set_pdata(struct ipu7_isys_su
+ 		(*sensor_sd)->i2c.board_info.platform_data = pdata;
+ 	} else if (connect == TYPE_SERDES) {
+ 		struct serdes_platform_data *pdata;
++		int ret;
++
++		ret = asus_gmsl_release_pwdnb(dev, ctl_data, hid_name,
++					     (*sensor_sd)->i2c.board_info.type);
++		if (ret)
++			return ret;
+ 
+ 		pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
+ 		if (!pdata)
