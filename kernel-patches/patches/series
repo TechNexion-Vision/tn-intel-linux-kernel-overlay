@@ -240,6 +240,7 @@
 0017-media-i2c-vlsgm2-handle-frame-intervals.ipu
 0018-media-i2c-vlsgm2-use-stable-entity-names.ipu
 0019-media-i2c-tevs-fix-trigger-stream-control.ipu
+0020-media-i2c-tevs-preserve-rpi22-expander-outputs.ipu
 # iaa
 0001-dmaengine-idxd-Add-a-new-IAA-device-ID-for-Wildcat-Lak.iaa
 # tbt

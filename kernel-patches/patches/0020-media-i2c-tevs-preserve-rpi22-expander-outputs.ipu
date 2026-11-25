@@ -1,0 +1,43 @@
+Subject: [PATCH] media: i2c: tevs: preserve RPI22 outputs on standby changes
+
+Read the current output latch before changing IO6. Preserve IO3 frame sync
+and the other outputs. Keep the write helper and initialization unchanged.
+
+---
+diff --git a/drivers/media/i2c/tevs/tevs_main.c b/drivers/media/i2c/tevs/tevs_main.c
+--- a/drivers/media/i2c/tevs/tevs_main.c
++++ b/drivers/media/i2c/tevs/tevs_main.c
+@@ -391,6 +391,21 @@
+ 	.cache_type = REGCACHE_NONE,
+ };
+ 
++static int tevs_pca953x_i2c_rd8(struct i2c_client *client, u8 reg, u8 *val)
++{
++	struct i2c_msg msgs[] = {
++		{ .addr = 0x27, .len = 1, .buf = &reg },
++		{ .addr = 0x27, .flags = I2C_M_RD, .len = 1, .buf = val },
++	};
++	int ret;
++
++	ret = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
++	if (ret != ARRAY_SIZE(msgs))
++		return ret < 0 ? ret : -EIO;
++
++	return 0;
++}
++
+ static int tevs_pca953x_i2c_wr8(struct i2c_client *client, u8 reg, u8 val)
+ {
+ 	struct i2c_msg msg;
+@@ -432,6 +447,11 @@
+ 	struct i2c_client *client = v4l2_get_subdevdata(&tevs->v4l2_subdev);
+ 	u8 val = 0xff;
+ 	int ret;
++
++	/* Preserve the frame-sync output on IO3. */
++	ret = tevs_pca953x_i2c_rd8(client, 0x01, &val);
++	if (ret < 0)
++		return ret;
+ 
+ 	if (standby == 0)
+ 		val &= ~(1 << 6);
