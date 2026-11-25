@@ -1,0 +1,107 @@
+Subject: [PATCH] media: i2c: tevs: fix trigger stream control
+
+Wake the ISP for normal and trigger streaming. Add a dedicated trigger-mode
+standby sequence that temporarily disables triggering, cycles the MIPI clock
+when continuous clock is enabled, and restores the hardware trigger selection.
+Keep the immediate control setter and the normal-mode stop sequence unchanged.
+Use named constants and comments for the trigger standby operations.
+
+---
+diff --git a/drivers/media/i2c/tevs/tevs_main.c b/drivers/media/i2c/tevs/tevs_main.c
+--- a/drivers/media/i2c/tevs/tevs_main.c
++++ b/drivers/media/i2c/tevs/tevs_main.c
+@@ -269,7 +269,10 @@
+ #define TEVS_DENOISE_MAX 						HOST_COMMAND_ISP_CTRL_DENOISE_MAX
+ #define TEVS_DENOISE_MIN 						HOST_COMMAND_ISP_CTRL_DENOISE_MIN
+ #define TEVS_DENOISE_MASK 						(0xFFFF)
++#define TEVS_HINF_CTRL_DEFAULT					(0x0010)
++#define TEVS_HINF_CTRL_CONT_CLOCK_SHIFT			(5)
+ #define TEVS_TRIGGER_MODE						HOST_COMMAND_ISP_CTRL_TRIGGER_MODE
++#define TEVS_TRIGGER_MODE_BASE					(0x0380)
+ #define TEVS_TRIGGER_MODE_MASK		 			(0x0003)
+ #define TEVS_TRIGGER_MODE_DISABLE				(0U << 0)
+ #define TEVS_TRIGGER_MODE_SYNC					(1U << 0)
+@@ -721,6 +724,54 @@
+ 	return 0;
+ }
+ 
++static int tevs_trigger_mode_standby(struct tevs *tevs)
++{
++	u16 mode;
++	int ret, restore;
++
++	/* Save the current trigger mode and temporarily disable triggering. */
++	ret = tevs_i2c_read_16b(tevs, TEVS_TRIGGER_MODE, &mode);
++	if (ret)
++		return ret;
++	ret = tevs_i2c_write_16b(tevs, TEVS_TRIGGER_MODE,
++				 TEVS_TRIGGER_MODE_BASE | TEVS_TRIGGER_MODE_DISABLE);
++	if (ret)
++		return ret;
++	/* Put the ISP into standby before changing its MIPI clock. */
++	ret = tevs_standby(tevs, true);
++	if (ret)
++		goto restore;
++
++	if (tevs->continuous_clock) {
++		/* Switch MIPI to non-continuous clock. */
++		ret = tevs_i2c_write_16b(tevs,
++			HOST_COMMAND_ISP_CTRL_PREVIEW_HINF_CTRL,
++			TEVS_HINF_CTRL_DEFAULT | tevs->data_lanes);
++		if (ret)
++			goto restore;
++		/* Wake the ISP, then restore continuous clock. */
++		ret = tevs_standby(tevs, false);
++		if (ret)
++			goto restore;
++		ret = tevs_i2c_write_16b(tevs,
++			HOST_COMMAND_ISP_CTRL_PREVIEW_HINF_CTRL,
++			TEVS_HINF_CTRL_DEFAULT |
++			(tevs->continuous_clock << TEVS_HINF_CTRL_CONT_CLOCK_SHIFT) |
++			tevs->data_lanes);
++		if (ret)
++			goto restore;
++		/* Leave the ISP in standby until the next stream start. */
++		ret = tevs_standby(tevs, true);
++	}
++
++restore:
++	/* Restore the trigger mode even on failure; keep the first error. */
++	restore = tevs_i2c_write_16b(tevs, TEVS_TRIGGER_MODE,
++				    TEVS_TRIGGER_MODE_BASE |
++				    (mode & TEVS_TRIGGER_MODE_MASK));
++	return ret ? ret : restore;
++}
++
+ static int tevs_set_stream(struct v4l2_subdev *sub_dev, int enable)
+ {
+ 	struct tevs *tevs = container_of(sub_dev, struct tevs, v4l2_subdev);
+@@ -734,14 +785,21 @@
+ 	dev_dbg(sub_dev->dev, "%s() enable [%x]\n", __func__, enable);
+ 
+ 	if (enable == 0) {
+-		if (!(tevs->hw_reset_mode | tevs_check_trigger_mode(tevs)))
+-			ret = tevs_standby(tevs, 1);
+-		/* Reset MIPI to non-continuous clock on stream stop (Jerry IPU6 c8d5d85ca465) */
+-		if (ret == 0)
+-			tevs_i2c_write_16b(tevs, HOST_COMMAND_ISP_CTRL_PREVIEW_HINF_CTRL,
+-				0x10 | (0 << 5) | (tevs->data_lanes));
++		/* Trigger mode without hardware reset: use its standby sequence. */
++		if (!tevs->hw_reset_mode && tevs_check_trigger_mode(tevs)) {
++			return tevs_trigger_mode_standby(tevs);
++		} else {
++			/* Normal mode without hardware reset: use the original standby path. */
++			if (!(tevs->hw_reset_mode | tevs_check_trigger_mode(tevs)))
++				ret = tevs_standby(tevs, 1);
++			/* Reset MIPI to non-continuous clock on stream stop (Jerry IPU6 c8d5d85ca465) */
++			if (ret == 0)
++				tevs_i2c_write_16b(tevs, HOST_COMMAND_ISP_CTRL_PREVIEW_HINF_CTRL,
++					0x10 | (0 << 5) | (tevs->data_lanes));
++		}
+ 	} else {
+-		if (!(tevs->hw_reset_mode | tevs_check_trigger_mode(tevs)))
++		/* Nomal/Trigger mode still needs an explicit wakeup. */
++		if (!tevs->hw_reset_mode)
+ 			ret = tevs_standby(tevs, 0);
+ 
+ 		if (ret == 0) {
